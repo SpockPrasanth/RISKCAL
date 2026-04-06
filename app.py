@@ -11,21 +11,38 @@ file = st.file_uploader("Upload Spectrum CSV File", type=["csv"])
 if file:
 
     # -----------------------------
-    # SAFE READ FOR SPECTRUM
+    # READ RAW LINES
     # -----------------------------
-    try:
-        df = pd.read_csv(file, encoding="latin1", sep=";")
-    except:
-        try:
-            df = pd.read_csv(file, encoding="latin1", sep=",")
-        except:
-            df = pd.read_csv(file, encoding="latin1", engine="python", on_bad_lines="skip")
+    content = file.getvalue().decode("latin1")
+    lines = content.split("\n")
+
+    # -----------------------------
+    # FIND HEADER ROW
+    # -----------------------------
+    header_index = None
+
+    for i, line in enumerate(lines):
+        if "Phase" in line and "Cost" in line:
+            header_index = i
+            break
+
+    if header_index is None:
+        st.error("Could not detect header row")
+        st.stop()
+
+    # -----------------------------
+    # LOAD DATA FROM HEADER
+    # -----------------------------
+    data = "\n".join(lines[header_index:])
+
+    from io import StringIO
+    df = pd.read_csv(StringIO(data), sep=",", engine="python")
 
     # -----------------------------
     # CLEAN DATA
     # -----------------------------
-    df = df.dropna(axis=1, how="all")
     df = df.dropna(how="all")
+    df = df.dropna(axis=1, how="all")
 
     st.subheader("Detected Columns")
     st.write(df.columns.tolist())
@@ -34,41 +51,37 @@ if file:
     st.dataframe(df.head())
 
     # -----------------------------
-    # MAP YOUR COLUMN NAMES HERE
+    # AUTO COLUMN MAPPING (SMART)
     # -----------------------------
-    # ⚠️ UPDATE THESE BASED ON YOUR FILE
+    def find_col(name_list):
+        for col in df.columns:
+            for keyword in name_list:
+                if keyword.lower() in col.lower():
+                    return col
+        return None
+
     col_map = {
-        "Job": "JobNumber",
-        "Phase": "PhaseCode",
-        "Phase Description": "PhaseDescription",
-        "Cost Type": "CostType",
-        "JTD Cost": "JTD_Cost",
-        "Projected Cost": "Projected_Cost",
-        "JTD Hours": "JTD_Hours",
-        "Projected Hours": "Projected_Hours"
+        "PhaseCode": find_col(["phase"]),
+        "CostType": find_col(["cost type"]),
+        "JTD_Cost": find_col(["jtd cost", "cost to date"]),
+        "Projected_Cost": find_col(["projected cost"]),
+        "JTD_Hours": find_col(["jtd hours"]),
+        "Projected_Hours": find_col(["projected hours"])
     }
 
-    # Rename if matches found
-    df = df.rename(columns={k: v for k, v in col_map.items() if k in df.columns})
-
-    required_cols = [
-        "PhaseCode", "CostType",
-        "JTD_Cost", "Projected_Cost",
-        "JTD_Hours", "Projected_Hours"
-    ]
-
-    missing = [c for c in required_cols if c not in df.columns]
+    missing = [k for k, v in col_map.items() if v is None]
 
     if missing:
-        st.error(f"Missing required columns: {missing}")
+        st.error(f"Could not map columns: {missing}")
         st.stop()
 
-    # -----------------------------
-    # CLEAN NUMERIC VALUES
-    # -----------------------------
-    num_cols = ["JTD_Cost", "Projected_Cost", "JTD_Hours", "Projected_Hours"]
+    # Rename columns
+    df = df.rename(columns={v: k for k, v in col_map.items()})
 
-    for col in num_cols:
+    # -----------------------------
+    # CLEAN NUMERIC DATA
+    # -----------------------------
+    for col in ["JTD_Cost", "Projected_Cost", "JTD_Hours", "Projected_Hours"]:
         df[col] = (
             df[col]
             .astype(str)
@@ -93,19 +106,19 @@ if file:
 
     df["Calculated_Risk"] = df["Rate_Diff"] * df["Remaining_Hours"]
 
-    # -----------------------------
-    # TOTALS
-    # -----------------------------
     total_risk = df["Calculated_Risk"].sum()
     total_projected_cost = df["Projected_Cost"].sum()
 
+    # -----------------------------
+    # CONTRACT INPUT
+    # -----------------------------
     contract = st.number_input("Contract Value", value=1000000)
 
     # -----------------------------
-    # CONT & GNSH
+    # CONTINGENCY / GAINSHARE
     # -----------------------------
-    contingency = df[df["PhaseCode"] == "CONT"]["Projected_Cost"].sum()
-    gainshare = df[df["PhaseCode"] == "GNSH"]["Projected_Cost"].sum()
+    contingency = df[df["PhaseCode"].astype(str).str.contains("CONT", na=False)]["Projected_Cost"].sum()
+    gainshare = df[df["PhaseCode"].astype(str).str.contains("GNSH", na=False)]["Projected_Cost"].sum()
 
     # -----------------------------
     # USER INPUT
