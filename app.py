@@ -7,19 +7,35 @@ st.set_page_config(page_title="Risk Calculator", layout="wide")
 st.title("Executive Risk Dashboard")
 
 # -----------------------------
+# SAFE FILE LOADER (Handles ALL CSV types)
+# -----------------------------
+def load_file(file):
+    try:
+        return pd.read_csv(file, encoding='latin1', sep=',')
+    except:
+        try:
+            return pd.read_csv(file, encoding='latin1', sep=';')
+        except:
+            try:
+                return pd.read_csv(file, encoding='utf-8', sep='\t')
+            except:
+                return pd.read_csv(file, encoding='latin1', engine='python', on_bad_lines='skip')
+
+# -----------------------------
 # FILE UPLOAD
 # -----------------------------
 file = st.file_uploader("Upload CSV File", type=["csv"])
 
 if file is not None:
 
-    # -----------------------------
-    # SAFE CSV READ (handles SAP messy files)
-    # -----------------------------
-    try:
-        df = pd.read_csv(file, encoding='latin1', sep=None, engine='python')
-    except:
-        df = pd.read_csv(file, encoding='utf-8', sep=None, engine='python')
+    df = load_file(file)
+
+    # Remove empty rows/columns
+    df = df.dropna(axis=1, how='all')
+    df = df.dropna(how='all')
+
+    st.subheader("Detected Columns")
+    st.write(df.columns.tolist())
 
     st.subheader("Data Preview")
     st.dataframe(df.head())
@@ -53,33 +69,27 @@ if file is not None:
         df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
 
     # -----------------------------
-    # CORE CALCULATIONS
+    # CORE CALCULATIONS (FROM YOUR CODE)
     # -----------------------------
     df["Remaining_Cost"] = df["Projected_Cost"] - df["JTD_Cost"]
     df["Remaining_Hours"] = df["Projected_Hours"] - df["JTD_Hours"]
 
-    df["JTD_Rate"] = np.where(
-        df["JTD_Hours"] != 0,
-        df["JTD_Cost"] / df["JTD_Hours"],
-        0
-    )
+    df["JTD_Rate"] = np.where(df["JTD_Hours"] != 0,
+                             df["JTD_Cost"] / df["JTD_Hours"], 0)
 
-    df["Remaining_Rate"] = np.where(
-        df["Remaining_Hours"] != 0,
-        df["Remaining_Cost"] / df["Remaining_Hours"],
-        0
-    )
+    df["Remaining_Rate"] = np.where(df["Remaining_Hours"] != 0,
+                                   df["Remaining_Cost"] / df["Remaining_Hours"], 0)
 
     df["Rate_Diff"] = df["JTD_Rate"] - df["Remaining_Rate"]
 
     df["Calculated_Risk"] = df["Rate_Diff"] * df["Remaining_Hours"]
 
     # -----------------------------
-    # LABOR CATEGORY
+    # LABOR CATEGORY LOGIC
     # -----------------------------
     office_codes = ["1000", "9310", "9410", "9510", "9520", "9610"]
 
-    def get_category(row):
+    def labor_category(row):
         if row["CostType"] != "Labor":
             return "NA"
         if str(row["PhaseCode"]) in office_codes:
@@ -90,7 +100,7 @@ if file is not None:
             return "Office"
         return "Field"
 
-    df["Labor_Category"] = df.apply(get_category, axis=1)
+    df["Labor_Category"] = df.apply(labor_category, axis=1)
 
     # -----------------------------
     # TOTALS
@@ -122,17 +132,17 @@ if file is not None:
     travel = st.sidebar.slider("Travel", -100000, 100000, 0)
     other = st.sidebar.slider("Other Direct", -100000, 100000, 0)
 
-    total_assumed = (
+    total_assumed_risk = (
         labor_field + labor_office + material +
         equipment + subcontractor + travel + other
     )
 
     # -----------------------------
-    # PROFIT
+    # PROFIT CALCULATIONS
     # -----------------------------
     gross_profit = contract_value - total_projected_cost
 
-    total_profit = gross_profit + contingency + total_assumed
+    total_profit = gross_profit + contingency + total_assumed_risk
 
     profit_pct = (total_profit / contract_value * 100) if contract_value != 0 else 0
 
@@ -173,7 +183,7 @@ if file is not None:
     st.bar_chart(chart)
 
     # -----------------------------
-    # DATA TABLE
+    # TABLE
     # -----------------------------
     st.subheader("Detailed Data")
     st.dataframe(df)
