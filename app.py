@@ -2,64 +2,96 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 
-st.set_page_config(page_title="Risk Calculator", layout="wide")
-
-st.title("Executive Risk Dashboard")
+# -----------------------------
+# PAGE CONFIG
+# -----------------------------
+st.set_page_config(page_title="Executive Risk Dashboard", layout="wide")
 
 # -----------------------------
-# SAFE FILE LOADER (Handles ALL CSV types)
+# CUSTOM CSS (UI DESIGN)
 # -----------------------------
-def load_file(file):
-    try:
-        return pd.read_csv(file, encoding='latin1', sep=',')
-    except:
-        try:
-            return pd.read_csv(file, encoding='latin1', sep=';')
-        except:
-            try:
-                return pd.read_csv(file, encoding='utf-8', sep='\t')
-            except:
-                return pd.read_csv(file, encoding='latin1', engine='python', on_bad_lines='skip')
+st.markdown("""
+<style>
+body {
+    background: linear-gradient(135deg, #1e293b, #0f172a);
+}
+
+.main-container {
+    background-color: white;
+    padding: 40px;
+    border-radius: 16px;
+    max-width: 900px;
+    margin: auto;
+    text-align: center;
+}
+
+.title {
+    font-size: 36px;
+    font-weight: bold;
+    color: #4f46e5;
+}
+
+.subtitle {
+    color: #6b7280;
+    margin-bottom: 30px;
+}
+
+.upload-box {
+    border: 2px dashed #cbd5e1;
+    padding: 40px;
+    border-radius: 12px;
+}
+</style>
+""", unsafe_allow_html=True)
+
+# -----------------------------
+# HEADER UI
+# -----------------------------
+st.markdown('<div class="main-container">', unsafe_allow_html=True)
+
+st.image("https://upload.wikimedia.org/wikipedia/commons/4/4f/Iconic_image_placeholder.png", width=80)
+
+st.markdown('<div class="title">Executive Risk Dashboard</div>', unsafe_allow_html=True)
+st.markdown('<div class="subtitle">Upload your Job Overview Report to begin analysis</div>', unsafe_allow_html=True)
 
 # -----------------------------
 # FILE UPLOAD
 # -----------------------------
 file = st.file_uploader("Upload CSV File", type=["csv"])
 
-if file is not None:
+st.markdown('</div>', unsafe_allow_html=True)
 
-    df = load_file(file)
+# -----------------------------
+# PROCESS DATA
+# -----------------------------
+if file:
 
-    # Remove empty rows/columns
+    # SAFE LOAD
+    try:
+        df = pd.read_csv(file, encoding='latin1', sep=',')
+    except:
+        try:
+            df = pd.read_csv(file, encoding='latin1', sep=';')
+        except:
+            df = pd.read_csv(file, encoding='latin1', engine='python', on_bad_lines='skip')
+
     df = df.dropna(axis=1, how='all')
     df = df.dropna(how='all')
 
-    st.subheader("Detected Columns")
-    st.write(df.columns.tolist())
-
-    st.subheader("Data Preview")
-    st.dataframe(df.head())
-
-    # -----------------------------
-    # REQUIRED COLUMNS CHECK
-    # -----------------------------
+    # REQUIRED COLUMNS
     required_cols = [
         "JobNumber", "PhaseCode", "PhaseDescription", "CostType",
         "JTD_Cost", "Projected_Cost", "JTD_Hours", "Projected_Hours"
     ]
 
-    missing = [col for col in required_cols if col not in df.columns]
+    missing = [c for c in required_cols if c not in df.columns]
 
     if missing:
-        st.error(f"Missing required columns: {missing}")
+        st.error(f"Missing columns: {missing}")
         st.stop()
 
-    # -----------------------------
-    # CLEAN NUMERIC DATA
-    # -----------------------------
-    num_cols = ["JTD_Cost", "Projected_Cost", "JTD_Hours", "Projected_Hours"]
-
-    for col in num_cols:
+    # CLEAN NUMBERS
+    for col in ["JTD_Cost", "Projected_Cost", "JTD_Hours", "Projected_Hours"]:
         df[col] = (
             df[col]
             .astype(str)
@@ -68,87 +100,48 @@ if file is not None:
         )
         df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
 
-    # -----------------------------
-    # CORE CALCULATIONS (FROM YOUR CODE)
-    # -----------------------------
+    # CALCULATIONS
     df["Remaining_Cost"] = df["Projected_Cost"] - df["JTD_Cost"]
     df["Remaining_Hours"] = df["Projected_Hours"] - df["JTD_Hours"]
 
-    df["JTD_Rate"] = np.where(df["JTD_Hours"] != 0,
-                             df["JTD_Cost"] / df["JTD_Hours"], 0)
-
-    df["Remaining_Rate"] = np.where(df["Remaining_Hours"] != 0,
-                                   df["Remaining_Cost"] / df["Remaining_Hours"], 0)
+    df["JTD_Rate"] = np.where(df["JTD_Hours"] != 0, df["JTD_Cost"] / df["JTD_Hours"], 0)
+    df["Remaining_Rate"] = np.where(df["Remaining_Hours"] != 0, df["Remaining_Cost"] / df["Remaining_Hours"], 0)
 
     df["Rate_Diff"] = df["JTD_Rate"] - df["Remaining_Rate"]
-
     df["Calculated_Risk"] = df["Rate_Diff"] * df["Remaining_Hours"]
 
-    # -----------------------------
-    # LABOR CATEGORY LOGIC
-    # -----------------------------
-    office_codes = ["1000", "9310", "9410", "9510", "9520", "9610"]
-
-    def labor_category(row):
-        if row["CostType"] != "Labor":
-            return "NA"
-        if str(row["PhaseCode"]) in office_codes:
-            return "Office"
-        desc = str(row["PhaseDescription"]).lower()
-        keywords = ["engineering", "design", "management", "admin", "project"]
-        if any(k in desc for k in keywords):
-            return "Office"
-        return "Field"
-
-    df["Labor_Category"] = df.apply(labor_category, axis=1)
-
-    # -----------------------------
     # TOTALS
-    # -----------------------------
-    total_projected_cost = df["Projected_Cost"].sum()
     total_risk = df["Calculated_Risk"].sum()
+    total_projected_cost = df["Projected_Cost"].sum()
 
-    # -----------------------------
     # CONTRACT INPUT
-    # -----------------------------
-    contract_value = st.number_input("Contract Value", value=1000000)
+    contract = st.number_input("Contract Value", value=1000000)
 
-    # -----------------------------
-    # CONTINGENCY & GAINSHARE
-    # -----------------------------
+    # CONT & GNSH
     contingency = df[df["PhaseCode"] == "CONT"]["Projected_Cost"].sum()
     gainshare = df[df["PhaseCode"] == "GNSH"]["Projected_Cost"].sum()
 
-    # -----------------------------
-    # USER INPUT (WHAT-IF)
-    # -----------------------------
+    # USER INPUT
     st.sidebar.header("Assumed Risk")
 
-    labor_field = st.sidebar.slider("Labor Field", -100000, 100000, 0)
-    labor_office = st.sidebar.slider("Labor Office", -100000, 100000, 0)
-    material = st.sidebar.slider("Material", -100000, 100000, 0)
-    equipment = st.sidebar.slider("Equipment", -100000, 100000, 0)
-    subcontractor = st.sidebar.slider("Subcontractor", -100000, 100000, 0)
-    travel = st.sidebar.slider("Travel", -100000, 100000, 0)
-    other = st.sidebar.slider("Other Direct", -100000, 100000, 0)
+    sliders = {
+        "Labor Field": st.sidebar.slider("Labor Field", -100000, 100000, 0),
+        "Labor Office": st.sidebar.slider("Labor Office", -100000, 100000, 0),
+        "Material": st.sidebar.slider("Material", -100000, 100000, 0),
+        "Equipment": st.sidebar.slider("Equipment", -100000, 100000, 0),
+        "Subcontractor": st.sidebar.slider("Subcontractor", -100000, 100000, 0),
+        "Travel": st.sidebar.slider("Travel", -100000, 100000, 0),
+        "Other": st.sidebar.slider("Other Direct", -100000, 100000, 0),
+    }
 
-    total_assumed_risk = (
-        labor_field + labor_office + material +
-        equipment + subcontractor + travel + other
-    )
+    total_assumed = sum(sliders.values())
 
-    # -----------------------------
-    # PROFIT CALCULATIONS
-    # -----------------------------
-    gross_profit = contract_value - total_projected_cost
+    # PROFIT
+    gross_profit = contract - total_projected_cost
+    total_profit = gross_profit + contingency + total_assumed
+    profit_pct = (total_profit / contract * 100) if contract != 0 else 0
 
-    total_profit = gross_profit + contingency + total_assumed_risk
-
-    profit_pct = (total_profit / contract_value * 100) if contract_value != 0 else 0
-
-    # -----------------------------
-    # RISK STATUS
-    # -----------------------------
+    # STATUS
     coverage = contingency + gainshare
 
     if total_risk <= 0:
@@ -159,34 +152,29 @@ if file is not None:
         status = "WARNING"
 
     # -----------------------------
-    # DASHBOARD
+    # DASHBOARD UI
     # -----------------------------
-    st.subheader("Key Metrics")
+    st.markdown("## Key Metrics")
 
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Contract Value", f"${contract_value:,.0f}")
-    col2.metric("Calculated Risk", f"${total_risk:,.0f}")
-    col3.metric("Contingency", f"${contingency:,.0f}")
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Contract", f"${contract:,.0f}")
+    c2.metric("Risk", f"${total_risk:,.0f}")
+    c3.metric("Contingency", f"${contingency:,.0f}")
 
-    col4, col5, col6 = st.columns(3)
-    col4.metric("Gainshare", f"${gainshare:,.0f}")
-    col5.metric("Total Profit", f"${total_profit:,.0f}")
-    col6.metric("Profit %", f"{profit_pct:.2f}%")
+    c4, c5, c6 = st.columns(3)
+    c4.metric("Gainshare", f"${gainshare:,.0f}")
+    c5.metric("Profit", f"${total_profit:,.0f}")
+    c6.metric("Profit %", f"{profit_pct:.2f}%")
 
-    st.subheader(f"Risk Status: {status}")
+    st.markdown(f"### Risk Status: {status}")
 
-    # -----------------------------
     # CHART
-    # -----------------------------
-    st.subheader("Risk by Cost Type")
-    chart = df.groupby("CostType")["Calculated_Risk"].sum()
-    st.bar_chart(chart)
+    st.markdown("## Risk by Cost Type")
+    st.bar_chart(df.groupby("CostType")["Calculated_Risk"].sum())
 
-    # -----------------------------
     # TABLE
-    # -----------------------------
-    st.subheader("Detailed Data")
+    st.markdown("## Detailed Data")
     st.dataframe(df)
 
 else:
-    st.info("Please upload a CSV file to begin.")
+    st.info("Upload a CSV file to begin")
