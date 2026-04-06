@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+from io import StringIO
 
 st.set_page_config(page_title="Executive Risk Dashboard", layout="wide")
 
@@ -11,7 +12,7 @@ file = st.file_uploader("Upload Spectrum CSV File", type=["csv"])
 if file:
 
     # -----------------------------
-    # READ RAW LINES
+    # READ FILE AS TEXT
     # -----------------------------
     content = file.getvalue().decode("latin1")
     lines = content.split("\n")
@@ -20,23 +21,29 @@ if file:
     # FIND HEADER ROW
     # -----------------------------
     header_index = None
-
     for i, line in enumerate(lines):
         if "Phase" in line and "Cost" in line:
             header_index = i
             break
 
     if header_index is None:
-        st.error("Could not detect header row")
+        st.error("Header row not found")
         st.stop()
 
     # -----------------------------
-    # LOAD DATA FROM HEADER
+    # GET DATA SECTION
     # -----------------------------
     data = "\n".join(lines[header_index:])
 
-    from io import StringIO
-    df = pd.read_csv(StringIO(data), sep=",", engine="python")
+    # -----------------------------
+    # FORCE FLEXIBLE PARSING
+    # -----------------------------
+    df = pd.read_csv(
+        StringIO(data),
+        engine="python",
+        sep=None,              # auto detect
+        on_bad_lines="skip"    # skip broken rows
+    )
 
     # -----------------------------
     # CLEAN DATA
@@ -51,12 +58,12 @@ if file:
     st.dataframe(df.head())
 
     # -----------------------------
-    # AUTO COLUMN MAPPING (SMART)
+    # SMART COLUMN DETECTION
     # -----------------------------
-    def find_col(name_list):
+    def find_col(keywords):
         for col in df.columns:
-            for keyword in name_list:
-                if keyword.lower() in col.lower():
+            for k in keywords:
+                if k.lower() in str(col).lower():
                     return col
         return None
 
@@ -72,14 +79,13 @@ if file:
     missing = [k for k, v in col_map.items() if v is None]
 
     if missing:
-        st.error(f"Could not map columns: {missing}")
+        st.error(f"Column mapping failed: {missing}")
         st.stop()
 
-    # Rename columns
     df = df.rename(columns={v: k for k, v in col_map.items()})
 
     # -----------------------------
-    # CLEAN NUMERIC DATA
+    # CLEAN NUMBERS
     # -----------------------------
     for col in ["JTD_Cost", "Projected_Cost", "JTD_Hours", "Projected_Hours"]:
         df[col] = (
@@ -103,7 +109,6 @@ if file:
                                    df["Remaining_Cost"] / df["Remaining_Hours"], 0)
 
     df["Rate_Diff"] = df["JTD_Rate"] - df["Remaining_Rate"]
-
     df["Calculated_Risk"] = df["Rate_Diff"] * df["Remaining_Hours"]
 
     total_risk = df["Calculated_Risk"].sum()
@@ -115,7 +120,7 @@ if file:
     contract = st.number_input("Contract Value", value=1000000)
 
     # -----------------------------
-    # CONTINGENCY / GAINSHARE
+    # CONT / GNSH
     # -----------------------------
     contingency = df[df["PhaseCode"].astype(str).str.contains("CONT", na=False)]["Projected_Cost"].sum()
     gainshare = df[df["PhaseCode"].astype(str).str.contains("GNSH", na=False)]["Projected_Cost"].sum()
