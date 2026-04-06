@@ -2,44 +2,79 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 
+# -----------------------------
+# PAGE CONFIG
+# -----------------------------
 st.set_page_config(page_title="Executive Risk Dashboard", layout="wide")
 
-st.title("Executive Risk Dashboard")
+# -----------------------------
+# UI DESIGN (HOMEPAGE STYLE)
+# -----------------------------
+st.markdown("""
+<style>
+body {
+    background: linear-gradient(135deg, #1e293b, #0f172a);
+}
+
+.main-box {
+    background-color: white;
+    padding: 40px;
+    border-radius: 16px;
+    max-width: 800px;
+    margin: auto;
+    text-align: center;
+}
+
+.title {
+    font-size: 34px;
+    font-weight: bold;
+    color: #4f46e5;
+}
+
+.subtitle {
+    color: #6b7280;
+    margin-bottom: 20px;
+}
+</style>
+""", unsafe_allow_html=True)
+
+# -----------------------------
+# HEADER
+# -----------------------------
+st.markdown('<div class="main-box">', unsafe_allow_html=True)
+
+st.markdown('<div class="title">Executive Risk Dashboard</div>', unsafe_allow_html=True)
+st.markdown('<div class="subtitle">Upload your Job Overview Report to begin analysis</div>', unsafe_allow_html=True)
 
 file = st.file_uploader("Upload CSV File", type=["csv"])
 
+st.markdown('</div>', unsafe_allow_html=True)
+
+# -----------------------------
+# PROCESS FILE
+# -----------------------------
 if file:
 
     # -----------------------------
-    # LOAD RAW FILE
+    # READ RAW FILE (NO PARSER)
     # -----------------------------
-    raw = pd.read_csv(file, encoding="latin1", header=None)
+    content = file.getvalue().decode("latin1")
+    lines = content.split("\n")
 
-    # -----------------------------
-    # CLEAN RAW DATA
-    # -----------------------------
-    raw = raw.fillna("")
-
-    # Convert all rows to string
-    raw = raw.astype(str)
-
-    # -----------------------------
-    # EXTRACT ONLY PHASE ROWS
-    # -----------------------------
     data_rows = []
 
-    for i in range(len(raw)):
-        row = raw.iloc[i].tolist()
-
-        # Look for actual phase data rows
-        if "Phase:" in row[0]:
+    for line in lines:
+        if "Phase:" in line:
 
             try:
-                phase_text = row[0]
+                parts = line.split(",")
+
+                phase_text = parts[0]
                 phase_code = phase_text.split(":")[1].strip().split(" ")[0]
 
-                cost_type = row[2]
-                cost_type_map = {
+                cost_type = parts[2].strip()
+
+                cost_map = {
                     "L": "Labor",
                     "E": "Equipment",
                     "M": "Material",
@@ -47,15 +82,19 @@ if file:
                     "T": "Travel",
                     "O": "Other"
                 }
+                cost_type = cost_map.get(cost_type, cost_type)
 
-                cost_type = cost_type_map.get(cost_type, cost_type)
+                def safe_float(x):
+                    try:
+                        return float(x.replace(",", "").strip())
+                    except:
+                        return 0
 
-                # Extract values (based on your file structure)
-                jtd_hours = float(row[6]) if row[6] else 0
-                projected_hours = float(row[7]) if row[7] else 0
+                jtd_hours = safe_float(parts[6])
+                projected_hours = safe_float(parts[7])
 
-                jtd_cost = float(row[11].replace(",", "")) if row[11] else 0
-                projected_cost = float(row[12].replace(",", "")) if row[12] else 0
+                jtd_cost = safe_float(parts[11])
+                projected_cost = safe_float(parts[12])
 
                 data_rows.append({
                     "JobNumber": "25057",
@@ -72,19 +111,16 @@ if file:
                 continue
 
     # -----------------------------
-    # CREATE CLEAN DATAFRAME
+    # CREATE DATAFRAME
     # -----------------------------
     df = pd.DataFrame(data_rows)
 
     if df.empty:
-        st.error("No usable data found in file")
+        st.error("No usable data found. Please check file format.")
         st.stop()
 
-    st.subheader("Cleaned Data")
-    st.dataframe(df)
-
     # -----------------------------
-    # RISK CALCULATIONS
+    # CALCULATIONS (YOUR LOGIC)
     # -----------------------------
     df["Remaining_Cost"] = df["Projected_Cost"] - df["JTD_Cost"]
     df["Remaining_Hours"] = df["Projected_Hours"] - df["JTD_Hours"]
@@ -96,8 +132,12 @@ if file:
                                    df["Remaining_Cost"] / df["Remaining_Hours"], 0)
 
     df["Rate_Diff"] = df["JTD_Rate"] - df["Remaining_Rate"]
+
     df["Calculated_Risk"] = df["Rate_Diff"] * df["Remaining_Hours"]
 
+    # -----------------------------
+    # TOTALS
+    # -----------------------------
     total_risk = df["Calculated_Risk"].sum()
     total_projected_cost = df["Projected_Cost"].sum()
 
@@ -107,7 +147,7 @@ if file:
     contract = st.number_input("Contract Value", value=179620000)
 
     # -----------------------------
-    # CONTINGENCY / GAINSHARE
+    # CONTINGENCY & GAINSHARE
     # -----------------------------
     contingency = df[df["PhaseCode"] == "CONT"]["Projected_Cost"].sum()
     gainshare = df[df["PhaseCode"] == "GNSH"]["Projected_Cost"].sum()
@@ -117,17 +157,17 @@ if file:
     # -----------------------------
     st.sidebar.header("Assumed Risk")
 
-    assumed = (
-        st.sidebar.slider("Labor", -100000, 100000, 0) +
-        st.sidebar.slider("Material", -100000, 100000, 0) +
-        st.sidebar.slider("Equipment", -100000, 100000, 0)
-    )
+    labor = st.sidebar.slider("Labor", -100000, 100000, 0)
+    material = st.sidebar.slider("Material", -100000, 100000, 0)
+    equipment = st.sidebar.slider("Equipment", -100000, 100000, 0)
+
+    total_assumed = labor + material + equipment
 
     # -----------------------------
     # PROFIT
     # -----------------------------
     gross_profit = contract - total_projected_cost
-    total_profit = gross_profit + contingency + assumed
+    total_profit = gross_profit + contingency + total_assumed
     profit_pct = (total_profit / contract * 100)
 
     # -----------------------------
@@ -143,19 +183,28 @@ if file:
         status = "WARNING"
 
     # -----------------------------
-    # UI
+    # DASHBOARD
     # -----------------------------
-    st.subheader("Metrics")
+    st.markdown("## Key Metrics")
 
     c1, c2, c3 = st.columns(3)
     c1.metric("Risk", f"${total_risk:,.0f}")
     c2.metric("Profit", f"${total_profit:,.0f}")
     c3.metric("Profit %", f"{profit_pct:.2f}%")
 
-    st.subheader(f"Status: {status}")
+    st.markdown(f"### Risk Status: {status}")
 
-    st.subheader("Risk by Cost Type")
+    # -----------------------------
+    # CHART
+    # -----------------------------
+    st.markdown("## Risk by Cost Type")
     st.bar_chart(df.groupby("CostType")["Calculated_Risk"].sum())
 
+    # -----------------------------
+    # TABLE
+    # -----------------------------
+    st.markdown("## Detailed Data")
+    st.dataframe(df)
+
 else:
-    st.info("Upload your SAP Job Overview CSV")
+    st.info("Upload your SAP Job Overview CSV file")
