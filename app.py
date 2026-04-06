@@ -2,125 +2,83 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 
-# -----------------------------
-# PAGE CONFIG
-# -----------------------------
 st.set_page_config(page_title="Executive Risk Dashboard", layout="wide")
 
-# -----------------------------
-# UI DESIGN (HOMEPAGE STYLE)
-# -----------------------------
-st.markdown("""
-<style>
-body {
-    background: linear-gradient(135deg, #1e293b, #0f172a);
-}
+st.title("Executive Risk Dashboard")
 
-.main-box {
-    background-color: white;
-    padding: 40px;
-    border-radius: 16px;
-    max-width: 800px;
-    margin: auto;
-    text-align: center;
-}
+file = st.file_uploader("Upload Spectrum CSV File", type=["csv"])
 
-.title {
-    font-size: 34px;
-    font-weight: bold;
-    color: #4f46e5;
-}
-
-.subtitle {
-    color: #6b7280;
-    margin-bottom: 20px;
-}
-</style>
-""", unsafe_allow_html=True)
-
-# -----------------------------
-# HEADER
-# -----------------------------
-st.markdown('<div class="main-box">', unsafe_allow_html=True)
-
-st.markdown('<div class="title">Executive Risk Dashboard</div>', unsafe_allow_html=True)
-st.markdown('<div class="subtitle">Upload your Job Overview Report to begin analysis</div>', unsafe_allow_html=True)
-
-file = st.file_uploader("Upload CSV File", type=["csv"])
-
-st.markdown('</div>', unsafe_allow_html=True)
-
-# -----------------------------
-# PROCESS FILE
-# -----------------------------
 if file:
 
     # -----------------------------
-    # READ RAW FILE (NO PARSER)
+    # SAFE READ FOR SPECTRUM
     # -----------------------------
-    content = file.getvalue().decode("latin1")
-    lines = content.split("\n")
-
-    data_rows = []
-
-    for line in lines:
-        if "Phase:" in line:
-
-            try:
-                parts = line.split(",")
-
-                phase_text = parts[0]
-                phase_code = phase_text.split(":")[1].strip().split(" ")[0]
-
-                cost_type = parts[2].strip()
-
-                cost_map = {
-                    "L": "Labor",
-                    "E": "Equipment",
-                    "M": "Material",
-                    "S": "Subcontractor",
-                    "T": "Travel",
-                    "O": "Other"
-                }
-                cost_type = cost_map.get(cost_type, cost_type)
-
-                def safe_float(x):
-                    try:
-                        return float(x.replace(",", "").strip())
-                    except:
-                        return 0
-
-                jtd_hours = safe_float(parts[6])
-                projected_hours = safe_float(parts[7])
-
-                jtd_cost = safe_float(parts[11])
-                projected_cost = safe_float(parts[12])
-
-                data_rows.append({
-                    "JobNumber": "25057",
-                    "PhaseCode": phase_code,
-                    "PhaseDescription": phase_text,
-                    "CostType": cost_type,
-                    "JTD_Cost": jtd_cost,
-                    "Projected_Cost": projected_cost,
-                    "JTD_Hours": jtd_hours,
-                    "Projected_Hours": projected_hours
-                })
-
-            except:
-                continue
+    try:
+        df = pd.read_csv(file, encoding="latin1", sep=";")
+    except:
+        try:
+            df = pd.read_csv(file, encoding="latin1", sep=",")
+        except:
+            df = pd.read_csv(file, encoding="latin1", engine="python", on_bad_lines="skip")
 
     # -----------------------------
-    # CREATE DATAFRAME
+    # CLEAN DATA
     # -----------------------------
-    df = pd.DataFrame(data_rows)
+    df = df.dropna(axis=1, how="all")
+    df = df.dropna(how="all")
 
-    if df.empty:
-        st.error("No usable data found. Please check file format.")
+    st.subheader("Detected Columns")
+    st.write(df.columns.tolist())
+
+    st.subheader("Preview")
+    st.dataframe(df.head())
+
+    # -----------------------------
+    # MAP YOUR COLUMN NAMES HERE
+    # -----------------------------
+    # ⚠️ UPDATE THESE BASED ON YOUR FILE
+    col_map = {
+        "Job": "JobNumber",
+        "Phase": "PhaseCode",
+        "Phase Description": "PhaseDescription",
+        "Cost Type": "CostType",
+        "JTD Cost": "JTD_Cost",
+        "Projected Cost": "Projected_Cost",
+        "JTD Hours": "JTD_Hours",
+        "Projected Hours": "Projected_Hours"
+    }
+
+    # Rename if matches found
+    df = df.rename(columns={k: v for k, v in col_map.items() if k in df.columns})
+
+    required_cols = [
+        "PhaseCode", "CostType",
+        "JTD_Cost", "Projected_Cost",
+        "JTD_Hours", "Projected_Hours"
+    ]
+
+    missing = [c for c in required_cols if c not in df.columns]
+
+    if missing:
+        st.error(f"Missing required columns: {missing}")
         st.stop()
 
     # -----------------------------
-    # CALCULATIONS (YOUR LOGIC)
+    # CLEAN NUMERIC VALUES
+    # -----------------------------
+    num_cols = ["JTD_Cost", "Projected_Cost", "JTD_Hours", "Projected_Hours"]
+
+    for col in num_cols:
+        df[col] = (
+            df[col]
+            .astype(str)
+            .str.replace(",", "", regex=False)
+            .str.replace("$", "", regex=False)
+        )
+        df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
+
+    # -----------------------------
+    # CALCULATIONS
     # -----------------------------
     df["Remaining_Cost"] = df["Projected_Cost"] - df["JTD_Cost"]
     df["Remaining_Hours"] = df["Projected_Hours"] - df["JTD_Hours"]
@@ -141,13 +99,10 @@ if file:
     total_risk = df["Calculated_Risk"].sum()
     total_projected_cost = df["Projected_Cost"].sum()
 
-    # -----------------------------
-    # CONTRACT INPUT
-    # -----------------------------
-    contract = st.number_input("Contract Value", value=179620000)
+    contract = st.number_input("Contract Value", value=1000000)
 
     # -----------------------------
-    # CONTINGENCY & GAINSHARE
+    # CONT & GNSH
     # -----------------------------
     contingency = df[df["PhaseCode"] == "CONT"]["Projected_Cost"].sum()
     gainshare = df[df["PhaseCode"] == "GNSH"]["Projected_Cost"].sum()
@@ -157,17 +112,17 @@ if file:
     # -----------------------------
     st.sidebar.header("Assumed Risk")
 
-    labor = st.sidebar.slider("Labor", -100000, 100000, 0)
-    material = st.sidebar.slider("Material", -100000, 100000, 0)
-    equipment = st.sidebar.slider("Equipment", -100000, 100000, 0)
-
-    total_assumed = labor + material + equipment
+    assumed = (
+        st.sidebar.slider("Labor", -100000, 100000, 0) +
+        st.sidebar.slider("Material", -100000, 100000, 0) +
+        st.sidebar.slider("Equipment", -100000, 100000, 0)
+    )
 
     # -----------------------------
     # PROFIT
     # -----------------------------
     gross_profit = contract - total_projected_cost
-    total_profit = gross_profit + contingency + total_assumed
+    total_profit = gross_profit + contingency + assumed
     profit_pct = (total_profit / contract * 100)
 
     # -----------------------------
@@ -183,28 +138,22 @@ if file:
         status = "WARNING"
 
     # -----------------------------
-    # DASHBOARD
+    # UI
     # -----------------------------
-    st.markdown("## Key Metrics")
+    st.subheader("Key Metrics")
 
     c1, c2, c3 = st.columns(3)
     c1.metric("Risk", f"${total_risk:,.0f}")
     c2.metric("Profit", f"${total_profit:,.0f}")
     c3.metric("Profit %", f"{profit_pct:.2f}%")
 
-    st.markdown(f"### Risk Status: {status}")
+    st.subheader(f"Status: {status}")
 
-    # -----------------------------
-    # CHART
-    # -----------------------------
-    st.markdown("## Risk by Cost Type")
+    st.subheader("Risk by Cost Type")
     st.bar_chart(df.groupby("CostType")["Calculated_Risk"].sum())
 
-    # -----------------------------
-    # TABLE
-    # -----------------------------
-    st.markdown("## Detailed Data")
+    st.subheader("Detailed Data")
     st.dataframe(df)
 
 else:
-    st.info("Upload your SAP Job Overview CSV file")
+    st.info("Upload Spectrum CSV file")
